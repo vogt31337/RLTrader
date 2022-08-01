@@ -30,7 +30,7 @@ if __name__ == '__main__':
         n_processes = args.parallel_jobs
 
         processes = []
-        for _ in range(n_processes):
+        for _ in range(n_processes-2):
             processes.append(Process(target=run_optimize, args=(args, logger)))
 
         for proc in processes:

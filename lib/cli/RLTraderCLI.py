@@ -23,7 +23,7 @@ class RLTraderCLI:
                                               description=__doc__)
 
         self.parser.add_argument("--data-provider", "-d", type=str, default="static")
-        self.parser.add_argument("--input-data-path", "-n", type=str, default="data/input/coinbase-1h-btc-usd.csv")
+        self.parser.add_argument("--input-data-path", "-n", type=str, default="data/input/aapl.csv") # default="data/input/coinbase-1h-btc-usd.csv")
         self.parser.add_argument("--reward-strategy", "-r", type=str, default="incremental-profit", dest="reward_strat")
         self.parser.add_argument("--pair", "-p", type=str, default="BTC/USD")
         self.parser.add_argument("--debug", "-D", action='store_false')

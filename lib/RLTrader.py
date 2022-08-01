@@ -1,4 +1,6 @@
 import os
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
+
 import optuna
 import numpy as np
 import pandas as pd
@@ -7,11 +9,13 @@ import quantstats as qs
 from os import path
 from typing import Dict
 
-from stable_baselines.common.base_class import BaseRLModel
-from stable_baselines.common.policies import BasePolicy, MlpLnLstmPolicy
-from stable_baselines.common.vec_env import DummyVecEnv, SubprocVecEnv
-from stable_baselines.common import set_global_seeds
-from stable_baselines import PPO2
+# from stable_baselines.common.base_class import BaseRLModel
+from stable_baselines3.common.base_class import BaseAlgorithm
+from stable_baselines3.common.policies import BasePolicy #, MlpLnLstmPolicy
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
+# from stable_baselines3.common import set_global_seeds
+from stable_baselines3 import PPO
+# from sb3_contrib import RecurrentPPO
 
 from lib.env.TradingEnv import TradingEnv
 from lib.env.reward import BaseRewardStrategy, IncrementalProfit, WeightedUnrealizedProfit
@@ -26,7 +30,7 @@ def make_env(data_provider: BaseDataProvider, rank: int = 0, seed: int = 0):
         env.seed(seed + rank)
         return env
 
-    set_global_seeds(seed)
+    #set_global_seeds(seed)
 
     return _init
 
@@ -36,33 +40,48 @@ class RLTrader:
     study_name = None
 
     def __init__(self,
-                 model: BaseRLModel = PPO2,
-                 policy: BasePolicy = MlpLnLstmPolicy,
+                 model: BaseAlgorithm = PPO,
+                 # policy: BasePolicy = "MlpLnLstmPolicy", # Not available atm for SB3
+                 policy: BasePolicy = "MlpPolicy",
+                 # policy: BasePolicy = "MlpLstmPolicy",
                  reward_strategy: BaseRewardStrategy = IncrementalProfit,
                  exchange_args: Dict = {},
+                 show_debug: bool = True,
+                 tensorboard_path: str = None,
+                 # input_data_path: str = 'data/input/coinbase-1h-btc-usd.csv',
+                 input_data_path: str = 'data/input/aapl.csv',
+                 params_db_path: str = 'sqlite:///data/params.db',
+                 date_format: ProviderDateFormat = ProviderDateFormat.DATETIME_HOUR_24,
+                 model_verbose: int = 1,
+                 n_envs: int = os.cpu_count(),
+                 batch_size: int = os.cpu_count(),
+                 train_split_percentage: float = 0.8,
+                 data_provider: str = 'static',
                  **kwargs):
-        self.logger = kwargs.get('logger', init_logger(__name__, show_debug=kwargs.get('show_debug', True)))
+
+        self.logger = kwargs.get('logger', init_logger(__name__, show_debug=show_debug))
 
         self.Model = model
         self.Policy = policy
         self.Reward_Strategy = reward_strategy
         self.exchange_args = exchange_args
-        self.tensorboard_path = kwargs.get('tensorboard_path', None)
-        self.input_data_path = kwargs.get('input_data_path', 'data/input/coinbase-1h-btc-usd.csv')
-        self.params_db_path = kwargs.get('params_db_path', 'sqlite:///data/params.db')
+        self.tensorboard_path = tensorboard_path
+        self.input_data_path = input_data_path
+        self.params_db_path = params_db_path
 
-        self.date_format = kwargs.get('date_format', ProviderDateFormat.DATETIME_HOUR_24)
+        self.date_format = date_format
 
-        self.model_verbose = kwargs.get('model_verbose', 1)
-        self.n_envs = kwargs.get('n_envs', os.cpu_count())
-        self.n_minibatches = kwargs.get('n_minibatches', self.n_envs)
-        self.train_split_percentage = kwargs.get('train_split_percentage', 0.8)
-        self.data_provider = kwargs.get('data_provider', 'static')
+        self.model_verbose = model_verbose
+        self.n_envs = n_envs
+        self.batch_size = batch_size
+        self.train_split_percentage = train_split_percentage
+        self.data_provider = data_provider
 
         self.initialize_data()
         self.initialize_optuna()
 
         self.logger.debug(f'Initialize RLTrader: {self.study_name}')
+        # self.policy_kwargs = dict(shared_lstm=True, enable_critic_lstm=True)
 
     def initialize_data(self):
         if self.data_provider == 'static':
@@ -84,11 +103,12 @@ class RLTrader:
     def initialize_optuna(self):
         try:
             train_env = DummyVecEnv([lambda: TradingEnv(self.data_provider)])
-            model = self.Model(self.Policy, train_env, nminibatches=1)
+            model = self.Model(self.Policy, train_env, batch_size=self.batch_size)
             strategy = self.Reward_Strategy()
 
-            self.study_name = f'{model.__class__.__name__}__{model.act_model.__class__.__name__}__{strategy.__class__.__name__}'
-        except:
+            self.study_name = f'{model.__class__.__name__}__{model.policy.__class__.__name__}__{strategy.__class__.__name__}'
+        except Exception as e:
+            print(e)
             self.study_name = f'UnknownModel__UnknownPolicy__UnknownStrategy'
 
         self.optuna_study = optuna.create_study(
@@ -109,13 +129,13 @@ class RLTrader:
             'gamma': params['gamma'],
             'learning_rate': params['learning_rate'],
             'ent_coef': params['ent_coef'],
-            'cliprange': params['cliprange'],
-            'noptepochs': int(params['noptepochs']),
-            'lam': params['lam'],
+            'clip_range': params['clip_range'],
+            'n_epochs': int(params['n_epochs']),
+            'gae_lambda': params['gae_lambda'],
         }
 
     def optimize_agent_params(self, trial):
-        if self.Model != PPO2:
+        if self.Model != PPO:
             return {'learning_rate': trial.suggest_loguniform('learning_rate', 1e-5, 1.)}
 
         return {
@@ -123,9 +143,9 @@ class RLTrader:
             'gamma': trial.suggest_loguniform('gamma', 0.9, 0.9999),
             'learning_rate': trial.suggest_loguniform('learning_rate', 1e-5, 1.),
             'ent_coef': trial.suggest_loguniform('ent_coef', 1e-8, 1e-1),
-            'cliprange': trial.suggest_uniform('cliprange', 0.1, 0.4),
-            'noptepochs': int(trial.suggest_loguniform('noptepochs', 1, 48)),
-            'lam': trial.suggest_uniform('lam', 0.8, 1.)
+            'clip_range': trial.suggest_uniform('clip_range', 0.1, 0.4),
+            'n_epochs': int(trial.suggest_loguniform('n_epochs', 1, 48)),
+            'gae_lambda': trial.suggest_uniform('gae_lambda', 0.8, 1.)
         }
 
     def optimize_params(self, trial, n_prune_evals_per_trial: int = 2, n_tests_per_eval: int = 1):
@@ -141,7 +161,7 @@ class RLTrader:
         model = self.Model(self.Policy,
                            train_env,
                            verbose=self.model_verbose,
-                           nminibatches=1,
+                           batch_size=self.n_envs * model_params['n_steps'],
                            tensorboard_log=self.tensorboard_path,
                            **model_params)
 
@@ -180,7 +200,8 @@ class RLTrader:
             last_reward = np.mean(rewards)
             trial.report(-1 * last_reward, eval_idx)
 
-            if trial.should_prune(eval_idx):
+            # if trial.should_prune(eval_idx):
+            if trial.should_prune():
                 raise optuna.structs.TrialPruned()
 
         return -1 * last_reward
@@ -219,7 +240,7 @@ class RLTrader:
         model = self.Model(self.Policy,
                            train_env,
                            verbose=self.model_verbose,
-                           nminibatches=self.n_minibatches,
+                           batch_size=self.n_envs * model_params['n_steps'],
                            tensorboard_log=self.tensorboard_path,
                            **model_params)
 

@@ -22,7 +22,7 @@ class StaticDataProvider(BaseDataProvider):
                 raise ValueError(
                     'Invalid "csv_data_path" argument passed to StaticDataProvider, file could not be found.')
 
-            self.data_frame = pd.read_csv(csv_data_path)
+            self.data_frame = pd.read_csv(csv_data_path, index_col=0)
         else:
             raise ValueError(
                 'StaticDataProvider requires either a "data_frame" or "csv_data_path argument".')
